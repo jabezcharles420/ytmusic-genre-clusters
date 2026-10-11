@@ -217,13 +217,34 @@ def run(min_cluster_size: int = 4, min_samples: int = 2, n_neighbors: int = 10,
             return (parts[-1] if parts else name).lower()
 
         styles = [simplify(s) for s in top_styles]
-        # What the tracks themselves classify as. A majority vote over per-track
-        # argmax beats both averaging probabilities (blurs sub-styles together)
-        # and z-scoring against the library mean (surfaces near-zero styles as
-        # noise, e.g. "sludge metal" naming an ambient cluster).
+        # Two signals, each wrong on its own. Averaging probabilities blurs
+        # sub-styles together; a per-track majority vote lets a stray prediction
+        # name a small cluster. Measured on this library: the vote said
+        # "post rock" for a Hammock / Sigur Rós cluster where the mean said
+        # "post-metal" (0.2311 vs 0.2395 — a dead heat, so the vote is right),
+        # but it said "laïkó" (Greek) for a Coke Studio / qawwali cluster where
+        # the mean ranked laïkó fifth behind "hindustani" (0.1485 vs 0.2096).
+        # So: take the vote only when the mean also rates its winner competitive.
         votes = collections.Counter(simplify(classes[int(np.argmax(S[i]))]) for i in idxs) \
             if len(classes) == S.shape[1] else collections.Counter()
-        signature = [name for name, _ in votes.most_common(8)] or styles
+        ranked_votes = votes.most_common(8)
+        signature = [name for name, _ in ranked_votes]
+        endorsed = set(signature)
+        mean_order = [s for s in styles if s in endorsed] or styles or signature
+
+        mean_by_name: dict[str, float] = {}
+        for j, cls in enumerate(classes):
+            key = simplify(cls)
+            mean_by_name[key] = max(mean_by_name.get(key, 0.0), float(style_vec[j]))
+        winner = signature[0] if signature else None
+        leader = styles[0] if styles else None
+        support = 0.0
+        if winner and leader:
+            top = mean_by_name.get(leader, 0.0)
+            support = mean_by_name.get(winner, 0.0) / top if top > 0 else 0.0
+        use_vote = bool(winner) and support >= 0.9 and (ranked_votes[0][1] if ranked_votes else 0) >= 2
+        ordered = signature if use_vote else mean_order
+        signature = ordered + [s for s in mean_order if s not in ordered]
         tags_ranked = _top(tags, 12)
 
         clusters.append({

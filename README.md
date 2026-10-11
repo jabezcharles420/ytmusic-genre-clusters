@@ -146,6 +146,10 @@ GitHub Pages. Search matches titles, artists, albums and genres, with a bounded
 fuzzy fallback that tolerates a typo (`shogaze` → `shoegaze`) without matching
 scattered letters across a long title.
 
+Clicking a genre opens its own page (`?view=genre&id=…`) with the cluster's
+stats, its styles and tags as filters, and its songs — so you don't scroll past
+a grid of 188 cards to see results. Back, refresh and deep links all work.
+
 Clusters, styles, Last.fm tags and catalogue genres are all clickable filters.
 Select several and they compose: clusters are OR'd within their facet, tags and
 genres are OR'd within theirs, and the facets AND together with the search

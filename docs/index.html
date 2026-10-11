@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=4">
 </head>
 <body>
 
@@ -33,6 +33,15 @@
 <main class="wrap">
 
   <section class="stats" id="stats"></section>
+
+  <section class="genrepage hidden" id="genrePage">
+    <button class="back" type="button" data-home="1">
+      <span aria-hidden="true">←</span> All genres
+    </button>
+    <h2 class="gpTitle" id="gpTitle"></h2>
+    <p class="gpMeta" id="gpMeta"></p>
+    <div class="gpChips" id="gpChips"></div>
+  </section>
 
   <section class="genres" id="genres">
     <div class="sectionhead">
@@ -61,6 +70,6 @@
 
 </main>
 
-<script src="app.js"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>

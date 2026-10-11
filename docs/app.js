@@ -1,5 +1,9 @@
 /* Liked Music, sorted by sound — dependency-free client-side search.
  *
+ * Two views, routed through the query string so refresh and Back both work:
+ *   home                 ?q=…&cluster=…&tag=…
+ *   one genre's page     ?view=genre&id=…   (tags filter within that genre)
+ *
  * Filter model: clusters are OR'd within their facet, tags/genres are OR'd
  * within theirs, and the facets AND together with the free-text query.
  * Tags are derived from a song's cluster, so requiring all of them (AND) would
@@ -60,12 +64,16 @@ let DATA = null;
 let profiles = new Map();
 
 const state = {
+  page: { kind: "home" },  // or { kind: "genre", id }
   q: "",
-  clusters: new Set(),   // cluster ids
-  tags: new Map(),       // normalized key -> display label
-  expanded: new Set(),   // videoIds whose detail panel is open
+  clusters: new Set(),     // cluster ids, OR'd
+  tags: new Map(),         // normalized key -> display label, OR'd
+  expanded: new Set(),     // videoIds whose detail panel is open
   shown: PAGE,
+  cameFromHome: false,
 };
+
+const onGenrePage = () => state.page.kind === "genre";
 
 /* ── scoring ─────────────────────────────────────────────── */
 
@@ -116,6 +124,7 @@ function scoreGenre(p, q) {
 /* ── filtering ───────────────────────────────────────────── */
 
 function passesFilters(t) {
+  if (onGenrePage() && t.c !== state.page.id) return false;
   if (state.clusters.size && !state.clusters.has(t.c)) return false;
   if (state.tags.size) {
     let any = false;
@@ -163,22 +172,27 @@ function renderStats() {
 }
 
 function genreCard(p) {
-  const on = state.clusters.has(p.id);
-  return `<button class="gcard" style="--h:${hue(p.name)}" data-cluster="${p.id}"
-            aria-pressed="${on}" title="${esc(p.styles.join(', '))}">
+  const h = hue(p.name);
+  const added = state.clusters.has(p.id);
+  return `<div class="gcard" style="--h:${h}">
+    <button class="gopen" type="button" data-open="${p.id}" title="Open this genre">
       <div class="gname">${esc(p.name)}</div>
       <div class="gn">${p.n} songs${p.bpm ? ` · ${Math.round(p.bpm)} bpm` : ""}</div>
       <div class="gart">${esc(p.artists.slice(0, 3).join(", "))}</div>
-    </button>`;
+    </button>
+    <button class="gadd${added ? " on" : ""}" type="button" data-add="${p.id}"
+            aria-pressed="${added}"
+            title="${added ? "Remove from filter" : "Add to filter"}">${added ? "✓" : "+"}</button>
+  </div>`;
 }
 
 function renderGenres() {
   const list = matchingClusters();
   $("genreGrid").innerHTML = list.map(genreCard).join("");
   const bits = [`${list.length} ${list.length === 1 ? "cluster" : "clusters"}`];
-  if (state.clusters.size) bits.push(`${state.clusters.size} selected`);
+  if (state.clusters.size) bits.push(`${state.clusters.size} in filter`);
   if (state.tags.size) bits.push(`filtered by ${state.tags.size} tag${state.tags.size === 1 ? "" : "s"}`);
-  $("genresHint").textContent = bits.join(" · ") + " — click to filter";
+  $("genresHint").textContent = bits.join(" · ") + " — open one, or ＋ to filter";
   $("genres").classList.toggle("hidden", list.length === 0);
 }
 
@@ -192,16 +206,17 @@ function tagBtn(label, kind, value) {
 
 function rowHTML(t) {
   const h = t.c >= 0 ? hue(t.cn) : 220;
-  const on = state.clusters.has(t.c);
   const open = state.expanded.has(t.v);
+  const chip = onGenrePage() ? "" :
+    `<div class="chip${t.c < 0 ? " plain" : ""}" style="--h:${h}" data-open="${t.c}"
+          title="Open this genre">${esc(t.cn)}</div>`;
   return `<div class="row" data-v="${esc(t.v)}">
     <div>
       <div class="t">${esc(t.t)}</div>
       <div class="meta">${esc(t.a)}${t.al ? " · " + esc(t.al) : ""}${t.y ? " · " + t.y : ""}</div>
     </div>
     <div class="bpm">${t.b ? Math.round(t.b) + " bpm" : ""}</div>
-    <div class="chip${t.c < 0 ? " plain" : ""}${on ? " on" : ""}" style="--h:${h}"
-         data-cluster="${t.c}" title="Filter by this cluster">${esc(t.cn)}</div>
+    ${chip}
     ${open ? detailHTML(t) : ""}
   </div>`;
 }
@@ -247,6 +262,23 @@ function filterBar() {
   $("filters").innerHTML = pills.join("");
 }
 
+function renderGenrePage(p) {
+  if (!p) return;
+  $("gpTitle").textContent = p.name;
+  const meta = [`${p.n} songs`];
+  if (p.bpm) meta.push(`${Math.round(p.bpm)} bpm avg`);
+  if ((p.years || []).length) meta.push(`mostly ${p.years.join(", ")}`);
+  if ((p.artists || []).length) meta.push(p.artists.slice(0, 4).join(", "));
+  $("gpMeta").textContent = meta.join(" · ");
+  const styles = (p.styles || []).slice(0, 5);
+  const tags = (p.tags || []).slice(0, 8);
+  $("gpChips").innerHTML =
+    `<span class="line"><span class="k">styles</span>${styles.map((s) => tagBtn(s, "tag")).join("")}</span>` +
+    (tags.length
+      ? `<span class="line"><span class="k">tags</span>${tags.map((s) => tagBtn(s, "tag")).join("")}</span>`
+      : "");
+}
+
 function renderList() {
   const q = norm(state.q);
   let rows = DATA.tracks.filter(passesFilters);
@@ -261,8 +293,14 @@ function renderList() {
   }
 
   const parts = [];
-  if (state.clusters.size === 1) parts.push(profiles.get([...state.clusters][0])?.name || "Cluster");
-  else if (state.clusters.size > 1) parts.push(`${state.clusters.size} clusters`);
+  if (onGenrePage()) {
+    const p = profiles.get(state.page.id);
+    if (p) parts.push(`in ${p.name}`);
+  } else if (state.clusters.size === 1) {
+    parts.push(profiles.get([...state.clusters][0])?.name || "Cluster");
+  } else if (state.clusters.size > 1) {
+    parts.push(`${state.clusters.size} clusters`);
+  }
   if (state.tags.size) parts.push(`${state.tags.size} tag${state.tags.size === 1 ? "" : "s"}`);
   if (q) parts.push(`“${state.q}”`);
   $("songsTitle").textContent =
@@ -289,20 +327,74 @@ function renderList() {
 }
 
 function render() {
-  renderGenres();
+  const genre = onGenrePage();
+  $("stats").classList.toggle("hidden", genre);
+  $("genrePage").classList.toggle("hidden", !genre);
+  $("genres").classList.toggle("hidden", genre);
+  if (genre) renderGenrePage(profiles.get(state.page.id));
+  else renderGenres();
   renderList();
 }
 
-/* ── state changes ───────────────────────────────────────── */
+/* ── routing ─────────────────────────────────────────────── */
 
-function syncURL() {
+function readURL() {
+  const params = new URLSearchParams(location.search);
+  state.q = params.get("q") || "";
+  state.clusters.clear();
+  for (const id of (params.get("cluster") || "").split(",")) {
+    const n = Number(id);
+    if (id !== "" && profiles.has(n)) state.clusters.add(n);
+  }
+  state.tags.clear();
+  for (const label of (params.get("tag") || "").split(",")) {
+    const key = norm(label);
+    if (key) state.tags.set(key, label.trim());
+  }
+  const id = Number(params.get("id"));
+  state.page = params.get("view") === "genre" && profiles.has(id)
+    ? { kind: "genre", id }
+    : { kind: "home" };
+  state.shown = PAGE;
+  $("q").value = state.q;
+}
+
+function syncURL(push = false) {
   const url = new URL(location.href);
   const set = (k, v) => { if (v) url.searchParams.set(k, v); else url.searchParams.delete(k); };
   set("q", state.q);
   set("cluster", [...state.clusters].join(","));
   set("tag", [...state.tags.values()].join(","));
-  history.replaceState(null, "", url);
+  if (onGenrePage()) { set("view", "genre"); set("id", state.page.id); }
+  else { set("view", ""); set("id", ""); }
+  (push ? history.pushState : history.replaceState).call(history, null, "", url);
 }
+
+function openGenre(id) {
+  if (!profiles.has(id)) return;
+  state.page = { kind: "genre", id };
+  state.clusters.clear();
+  state.tags.clear();
+  state.expanded.clear();
+  state.cameFromHome = true;
+  syncURL(true);
+  render();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function goHome() {
+  if (state.cameFromHome) {          // restore the previous view from history
+    state.cameFromHome = false;
+    history.back();
+    return;
+  }
+  state.page = { kind: "home" };
+  syncURL(true);
+  render();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+/* ── state changes ───────────────────────────────────────── */
 
 function toggleCluster(id) {
   if (state.clusters.has(id)) state.clusters.delete(id);
@@ -350,15 +442,26 @@ $("q").addEventListener("input", (e) => {
   }, 90);
 });
 
+window.addEventListener("popstate", () => {
+  state.cameFromHome = false;
+  readURL();
+  render();
+});
+
 document.addEventListener("click", (e) => {
+  if (e.target.closest("[data-home]")) { goHome(); return; }
+
   const tag = e.target.closest("[data-tag]");
   if (tag) { toggleTag(tag.dataset.tag); revealList(); return; }
 
-  const card = e.target.closest(".gcard");
-  if (card) { toggleCluster(Number(card.dataset.cluster)); revealList(); return; }
+  const open = e.target.closest("[data-open]");
+  if (open) { openGenre(Number(open.dataset.open)); return; }
 
-  const chip = e.target.closest("[data-cluster]");
-  if (chip) { toggleCluster(Number(chip.dataset.cluster)); revealList(); return; }
+  const add = e.target.closest("[data-add]");
+  if (add) { toggleCluster(Number(add.dataset.add)); return; }
+
+  const cbtn = e.target.closest(".tag[data-cluster]");
+  if (cbtn) { openGenre(Number(cbtn.dataset.cluster)); return; }
 
   const dropC = e.target.closest("[data-drop-cluster]");
   if (dropC) { toggleCluster(Number(dropC.dataset.dropCluster)); return; }
@@ -413,18 +516,7 @@ fetch("data.json")
       t._all = `${t._n} ${t._a} ${t._al} ${t._c} ${t._g}`;
       t._tags = profiles.get(t.c)?._tags || new Set();
     }
-
-    const params = new URLSearchParams(location.search);
-    state.q = params.get("q") || "";
-    for (const id of (params.get("cluster") || "").split(",")) {
-      const n = Number(id);
-      if (id !== "" && profiles.has(n)) state.clusters.add(n);
-    }
-    for (const label of (params.get("tag") || "").split(",")) {
-      const key = norm(label);
-      if (key) state.tags.set(key, label.trim());
-    }
-    $("q").value = state.q;
+    readURL();
     renderStats();
     render();
   })

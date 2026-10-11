@@ -31,6 +31,7 @@ def run() -> dict:
             "name": c["name"],
             "n": c["size"],
             "bpm": c["bpm"],
+            "years": c.get("years", []),
             "styles": c["styles"][:5],
             "tags": c["tags"][:8],
             "artists": c["artists"][:5],
