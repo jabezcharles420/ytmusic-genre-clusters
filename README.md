@@ -142,9 +142,16 @@ headers file instead.
 ## Web UI
 
 `docs/` is a dependency-free static site (vanilla JS, no build step) served by
-GitHub Pages. Search matches titles, artists, albums and genres, with a
-subsequence fallback for typos; genre cards filter the list, and state lives in
-the URL so results are linkable.
+GitHub Pages. Search matches titles, artists, albums and genres, with a bounded
+fuzzy fallback that tolerates a typo (`shogaze` → `shoegaze`) without matching
+scattered letters across a long title.
+
+Clusters, styles, Last.fm tags and catalogue genres are all clickable filters.
+Select several and they compose: clusters are OR'd within their facet, tags and
+genres are OR'd within theirs, and the facets AND together with the search
+query. Tags are derived from a song's cluster, so requiring *all* of them would
+almost always return nothing — "shoegaze" and "boom bap" never co-occur. State
+lives in the URL (`?q=…&cluster=…&tag=…`), so any view is linkable.
 
 ## Layout
 

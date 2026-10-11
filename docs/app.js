@@ -1,4 +1,10 @@
-/* Liked Music, sorted by sound — dependency-free client-side search. */
+/* Liked Music, sorted by sound — dependency-free client-side search.
+ *
+ * Filter model: clusters are OR'd within their facet, tags/genres are OR'd
+ * within theirs, and the facets AND together with the free-text query.
+ * Tags are derived from a song's cluster, so requiring all of them (AND) would
+ * almost always return nothing — "shoegaze" and "boom bap" never co-occur.
+ */
 
 const PAGE = 150;
 
@@ -19,36 +25,65 @@ function hue(name) {
   return h % 360;
 }
 
-function subsequence(needle, hay) {
+/* Bounded fuzzy match: the query's letters must appear within a short window of
+ * the target AND at the start of a word. That tolerates a typo
+ * ("shogaze" → "shoegaze") but rejects the false positives an unbounded
+ * subsequence produces — e.g. "laika" matching "Edward Maya feat. Jigulina
+ * Vika", where l-a-i-k-a happen to sit inside the surname "jigulina vika". */
+function fuzzyWindow(needle, hay) {
   let i = 0;
+  let end = -1;
   for (let j = 0; j < hay.length && i < needle.length; j++) {
-    if (hay[j] === needle[i]) i++;
+    if (hay[j] === needle[i]) { i++; end = j; }
   }
-  return i === needle.length;
+  if (i < needle.length) return null;
+  let k = needle.length - 1;
+  let start = end;
+  for (let j = end; j >= 0 && k >= 0; j--) {
+    if (hay[j] === needle[k]) { if (k === 0) start = j; k--; }
+  }
+  return { start, span: end - start + 1 };
+}
+
+const FUZZ_MIN = 4;   // shorter queries match too much to fuzz safely
+const FUZZ_SLACK = 2; // allowed extra characters inside the matched window
+
+function fuzzScore(q, field) {
+  if (q.length < FUZZ_MIN) return 0;
+  const w = fuzzyWindow(q, field);
+  if (!w || w.span > q.length + FUZZ_SLACK) return 0;
+  if (w.start > 0 && field[w.start - 1] !== " ") return 0; // must begin a word
+  return 1;
 }
 
 let DATA = null;
 let profiles = new Map();
-let state = { q: "", cluster: null, shown: PAGE };
+
+const state = {
+  q: "",
+  clusters: new Set(),   // cluster ids
+  tags: new Map(),       // normalized key -> display label
+  expanded: new Set(),   // videoIds whose detail panel is open
+  shown: PAGE,
+};
 
 /* ── scoring ─────────────────────────────────────────────── */
 
 function scoreTrack(t, q) {
   const tokens = q.split(" ").filter(Boolean);
   let s = 0;
+  let strong = false;   // a result only appears if it has a genuine match
 
-  if (t._n === q) s += 120;
-  else if (t._n.startsWith(q)) s += 70;
-  else if (t._n.includes(q)) s += 45;
-  else if (subsequence(q, t._n)) s += 12;
+  if (t._n === q) { s += 120; strong = true; }
+  else if (t._n.startsWith(q)) { s += 70; strong = true; }
+  else if (t._n.includes(q)) { s += 45; strong = true; }
 
-  if (t._a.startsWith(q)) s += 35;
-  else if (t._a.includes(q)) s += 22;
-  else if (subsequence(q, t._a)) s += 8;
+  if (t._a.startsWith(q)) { s += 35; strong = true; }
+  else if (t._a.includes(q)) { s += 22; strong = true; }
 
-  if (t._al.includes(q)) s += 8;
-  if (t._c.includes(q)) s += 14;          // matches the genre name
-  if (t._g.includes(q)) s += 10;          // matches styles / tags
+  if (t._al.includes(q)) { s += 8; strong = true; }
+  if (t._c.includes(q)) { s += 14; strong = true; }   // matches the genre name
+  if (t._g.includes(q)) { s += 10; strong = true; }   // matches styles / tags
 
   if (tokens.length > 1) {
     let hit = 0;
@@ -56,8 +91,14 @@ function scoreTrack(t, q) {
       if (tk.length > 1 && t._all.includes(tk)) hit++;
     }
     s += (hit / tokens.length) * 30;
+    if (hit === tokens.length) strong = true;
   }
-  return s;
+
+  if (!strong) {
+    if (fuzzScore(q, t._n)) { s += 10; strong = true; }
+    else if (fuzzScore(q, t._a)) { s += 6; strong = true; }
+  }
+  return strong ? s : 0;
 }
 
 function scoreGenre(p, q) {
@@ -70,6 +111,39 @@ function scoreGenre(p, q) {
     if (p._text.includes(tk)) s += 8;
   }
   return s;
+}
+
+/* ── filtering ───────────────────────────────────────────── */
+
+function passesFilters(t) {
+  if (state.clusters.size && !state.clusters.has(t.c)) return false;
+  if (state.tags.size) {
+    let any = false;
+    for (const key of state.tags.keys()) {
+      if (t._tags.has(key)) { any = true; break; }
+    }
+    if (!any) return false;
+  }
+  return true;
+}
+
+function matchingClusters() {
+  let list = DATA.clusters;
+  if (state.tags.size) {
+    list = list.filter((p) => {
+      for (const key of state.tags.keys()) if (p._tags.has(key)) return true;
+      return false;
+    });
+  }
+  if (state.q) {
+    const q = norm(state.q);
+    list = list
+      .map((p) => [scoreGenre(p, q), p])
+      .filter(([s]) => s > 0)
+      .sort((a, b) => b[0] - a[0])
+      .map((x) => x[1]);
+  }
+  return list;
 }
 
 /* ── rendering ───────────────────────────────────────────── */
@@ -89,9 +163,8 @@ function renderStats() {
 }
 
 function genreCard(p) {
-  const h = hue(p.name);
-  const on = state.cluster === p.id;
-  return `<button class="gcard" style="--h:${h}" data-cluster="${p.id}"
+  const on = state.clusters.has(p.id);
+  return `<button class="gcard" style="--h:${hue(p.name)}" data-cluster="${p.id}"
             aria-pressed="${on}" title="${esc(p.styles.join(', '))}">
       <div class="gname">${esc(p.name)}</div>
       <div class="gn">${p.n} songs${p.bpm ? ` · ${Math.round(p.bpm)} bpm` : ""}</div>
@@ -99,25 +172,37 @@ function genreCard(p) {
     </button>`;
 }
 
-function renderGenres(matches) {
-  const list = matches === null ? DATA.clusters : matches;
+function renderGenres() {
+  const list = matchingClusters();
   $("genreGrid").innerHTML = list.map(genreCard).join("");
-  $("genresHint").textContent = matches === null
-    ? `${DATA.clusters.length} clusters — click one to filter the song list`
-    : `${list.length} matching ${list.length === 1 ? "genre" : "genres"}`;
+  const bits = [`${list.length} ${list.length === 1 ? "cluster" : "clusters"}`];
+  if (state.clusters.size) bits.push(`${state.clusters.size} selected`);
+  if (state.tags.size) bits.push(`filtered by ${state.tags.size} tag${state.tags.size === 1 ? "" : "s"}`);
+  $("genresHint").textContent = bits.join(" · ") + " — click to filter";
   $("genres").classList.toggle("hidden", list.length === 0);
+}
+
+function tagBtn(label, kind, value) {
+  const on = kind === "cluster"
+    ? state.clusters.has(Number(value))
+    : state.tags.has(norm(label));
+  return `<button class="tag${on ? " on" : ""}" type="button"
+      data-${kind}="${esc(value ?? label)}" aria-pressed="${on}">${esc(label)}</button>`;
 }
 
 function rowHTML(t) {
   const h = t.c >= 0 ? hue(t.cn) : 220;
+  const on = state.clusters.has(t.c);
+  const open = state.expanded.has(t.v);
   return `<div class="row" data-v="${esc(t.v)}">
     <div>
       <div class="t">${esc(t.t)}</div>
       <div class="meta">${esc(t.a)}${t.al ? " · " + esc(t.al) : ""}${t.y ? " · " + t.y : ""}</div>
     </div>
     <div class="bpm">${t.b ? Math.round(t.b) + " bpm" : ""}</div>
-    <div class="chip${t.c < 0 ? " plain" : ""}" style="--h:${h}"
-         data-cluster="${t.c}" title="Filter by this genre">${esc(t.cn)}</div>
+    <div class="chip${t.c < 0 ? " plain" : ""}${on ? " on" : ""}" style="--h:${h}"
+         data-cluster="${t.c}" title="Filter by this cluster">${esc(t.cn)}</div>
+    ${open ? detailHTML(t) : ""}
   </div>`;
 }
 
@@ -125,21 +210,46 @@ function detailHTML(t) {
   const p = profiles.get(t.c);
   const bits = [];
   if (p) {
-    bits.push(`<span><span class="k">cluster:</span> ${esc(p.styles.slice(0, 4).join(", "))}</span>`);
-    if (p.tags.length) bits.push(`<span><span class="k">tags:</span> ${esc(p.tags.slice(0, 5).join(", "))}</span>`);
-    if (p.bpm) bits.push(`<span><span class="k">cluster bpm:</span> ${Math.round(p.bpm)}</span>`);
+    bits.push(`<span class="line"><span class="k">cluster</span>${tagBtn(p.name, "cluster", p.id)}</span>`);
+    bits.push(`<span class="line"><span class="k">styles</span>${p.styles.slice(0, 5).map((s) => tagBtn(s, "tag")).join("")}</span>`);
+    if (p.tags.length) {
+      bits.push(`<span class="line"><span class="k">tags</span>${p.tags.slice(0, 6).map((s) => tagBtn(s, "tag")).join("")}</span>`);
+    }
   }
-  if (t.g && t.g.length) bits.push(`<span><span class="k">genres:</span> ${esc(t.g.join(", "))}</span>`);
-  if (!t.m) bits.push(`<span><span class="k">no catalogue match — placed by tags</span></span>`);
-  bits.push(`<a href="https://music.youtube.com/watch?v=${encodeURIComponent(t.v)}"
+  if (t.g && t.g.length) {
+    bits.push(`<span class="line"><span class="k">genres</span>${t.g.map((s) => tagBtn(s, "tag")).join("")}</span>`);
+  }
+  const extra = [];
+  if (t.b) extra.push(`${Math.round(t.b)} bpm`);
+  if (p && p.bpm) extra.push(`cluster avg ${Math.round(p.bpm)} bpm`);
+  if (!t.m) extra.push("no catalogue match — placed by tags");
+  extra.push(`<a href="https://music.youtube.com/watch?v=${encodeURIComponent(t.v)}"
                  target="_blank" rel="noopener">Open in YouTube Music ↗</a>`);
+  bits.push(`<span class="line dim">${extra.join(" · ")}</span>`);
   return `<div class="detail">${bits.join("")}</div>`;
 }
 
+function filterBar() {
+  const pills = [];
+  for (const id of state.clusters) {
+    const p = profiles.get(id);
+    if (p) pills.push(`<span class="pill" style="--h:${hue(p.name)}">
+      <span class="dot"></span>${esc(p.name)}
+      <button type="button" data-drop-cluster="${id}" aria-label="Remove ${esc(p.name)}">×</button></span>`);
+  }
+  for (const [key, label] of state.tags) {
+    pills.push(`<span class="pill tagpill">#${esc(label)}
+      <button type="button" data-drop-tag="${esc(key)}" aria-label="Remove ${esc(label)}">×</button></span>`);
+  }
+  if (pills.length > 1) {
+    pills.push(`<button class="clearall" type="button" data-clear-all="1">clear all</button>`);
+  }
+  $("filters").innerHTML = pills.join("");
+}
+
 function renderList() {
-  const q = state.q;
-  let rows = DATA.tracks;
-  if (state.cluster !== null) rows = rows.filter((t) => t.c === state.cluster);
+  const q = norm(state.q);
+  let rows = DATA.tracks.filter(passesFilters);
   if (q) {
     const scored = [];
     for (const t of rows) {
@@ -150,19 +260,23 @@ function renderList() {
     rows = scored.map((x) => x[1]);
   }
 
-  const title = state.cluster !== null
-    ? (profiles.get(state.cluster)?.name || "Songs")
-    : (q ? "Results" : "All songs");
-  $("songsTitle").textContent = `${title} · ${rows.length.toLocaleString()}`;
+  const parts = [];
+  if (state.clusters.size === 1) parts.push(profiles.get([...state.clusters][0])?.name || "Cluster");
+  else if (state.clusters.size > 1) parts.push(`${state.clusters.size} clusters`);
+  if (state.tags.size) parts.push(`${state.tags.size} tag${state.tags.size === 1 ? "" : "s"}`);
+  if (q) parts.push(`“${state.q}”`);
+  $("songsTitle").textContent =
+    `${parts.length ? parts.join(" · ") : "All songs"} · ${rows.length.toLocaleString()}`;
 
-  $("filters").innerHTML = state.cluster !== null
-    ? `<span class="pill">${esc(profiles.get(state.cluster)?.name || "")}
-         <button type="button" data-clear="1" aria-label="Clear genre filter">×</button></span>`
-    : "";
+  filterBar();
 
   if (!rows.length) {
-    $("list").innerHTML = `<div class="empty"><b>No match for “${esc(q)}”</b>
-      Try an artist, a track name, or a genre like <em>shoegaze</em>.</div>`;
+    const hint = state.tags.size || state.clusters.size
+      ? "No song matches every filter. Remove one, or clear all."
+      : `It may not be in this library — try another spelling, an artist, album or genre
+         (like <em>shoegaze</em>).`;
+    $("list").innerHTML = `<div class="empty"><b>No match${
+      q ? ` for “${esc(state.q)}”` : ""}</b>${hint}</div>`;
     $("more").innerHTML = "";
     return;
   }
@@ -175,24 +289,51 @@ function renderList() {
 }
 
 function render() {
-  const q = norm(state.q);
-  const matches = q ? DATA.clusters
-    .map((p) => [scoreGenre(p, q), p])
-    .filter(([s]) => s > 0)
-    .sort((a, b) => b[0] - a[0])
-    .map((x) => x[1]) : null;
-  renderGenres(matches);
+  renderGenres();
   renderList();
 }
 
-/* ── URL state ───────────────────────────────────────────── */
+/* ── state changes ───────────────────────────────────────── */
 
 function syncURL() {
   const url = new URL(location.href);
-  if (state.q) url.searchParams.set("q", state.q); else url.searchParams.delete("q");
-  if (state.cluster !== null) url.searchParams.set("genre", state.cluster);
-  else url.searchParams.delete("genre");
+  const set = (k, v) => { if (v) url.searchParams.set(k, v); else url.searchParams.delete(k); };
+  set("q", state.q);
+  set("cluster", [...state.clusters].join(","));
+  set("tag", [...state.tags.values()].join(","));
   history.replaceState(null, "", url);
+}
+
+function toggleCluster(id) {
+  if (state.clusters.has(id)) state.clusters.delete(id);
+  else state.clusters.add(id);
+  state.shown = PAGE;
+  syncURL();
+  render();
+}
+
+function toggleTag(label) {
+  const key = norm(label);
+  if (!key) return;
+  if (state.tags.has(key)) state.tags.delete(key);
+  else state.tags.set(key, label);
+  state.shown = PAGE;
+  syncURL();
+  render();
+}
+
+function clearAll() {
+  state.clusters.clear();
+  state.tags.clear();
+  state.q = "";
+  $("q").value = "";
+  state.shown = PAGE;
+  syncURL();
+  render();
+}
+
+function revealList() {
+  $("songsTitle").scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
 /* ── events ──────────────────────────────────────────────── */
@@ -210,44 +351,33 @@ $("q").addEventListener("input", (e) => {
 });
 
 document.addEventListener("click", (e) => {
-  const chip = e.target.closest(".chip[data-cluster]");
-  if (chip) {
-    const id = Number(chip.dataset.cluster);
-    state.cluster = state.cluster === id ? null : id;
-    state.shown = PAGE;
-    syncURL();
-    render();
-    $("songsTitle").scrollIntoView({ behavior: "smooth", block: "center" });
-    return;
-  }
+  const tag = e.target.closest("[data-tag]");
+  if (tag) { toggleTag(tag.dataset.tag); revealList(); return; }
+
   const card = e.target.closest(".gcard");
-  if (card) {
-    const id = Number(card.dataset.cluster);
-    state.cluster = state.cluster === id ? null : id;
-    state.shown = PAGE;
-    syncURL();
-    render();
-    $("songsTitle").scrollIntoView({ behavior: "smooth", block: "center" });
-    return;
-  }
-  if (e.target.closest("[data-clear]")) {
-    state.cluster = null;
-    state.shown = PAGE;
-    syncURL();
-    render();
-    return;
-  }
-  if (e.target.closest("[data-more]")) {
-    state.shown += PAGE;
-    renderList();
-    return;
-  }
+  if (card) { toggleCluster(Number(card.dataset.cluster)); revealList(); return; }
+
+  const chip = e.target.closest("[data-cluster]");
+  if (chip) { toggleCluster(Number(chip.dataset.cluster)); revealList(); return; }
+
+  const dropC = e.target.closest("[data-drop-cluster]");
+  if (dropC) { toggleCluster(Number(dropC.dataset.dropCluster)); return; }
+
+  const dropT = e.target.closest("[data-drop-tag]");
+  if (dropT) { state.tags.delete(dropT.dataset.dropTag); state.shown = PAGE; syncURL(); render(); return; }
+
+  if (e.target.closest("[data-clear-all]")) { clearAll(); return; }
+  if (e.target.closest("[data-more]")) { state.shown += PAGE; renderList(); return; }
+
   const row = e.target.closest(".row");
-  if (row && !e.target.closest("a")) {
-    const open = row.querySelector(".detail");
-    if (open) { open.remove(); return; }
+  if (row && !e.target.closest("a") && !e.target.closest("button")) {
     const t = DATA.tracks.find((x) => x.v === row.dataset.v);
-    if (t) row.insertAdjacentHTML("beforeend", detailHTML(t));
+    if (!t) return;
+    if (state.expanded.has(t.v)) state.expanded.delete(t.v);
+    else state.expanded.add(t.v);
+    // replace only this row: a full re-render would drop scroll position and
+    // close any other open panels
+    row.outerHTML = rowHTML(t);
   }
 });
 
@@ -257,12 +387,8 @@ document.addEventListener("keydown", (e) => {
     $("q").focus();
     $("q").select();
   } else if (e.key === "Escape") {
-    state.q = "";
-    state.cluster = null;
-    $("q").value = "";
+    clearAll();
     $("q").blur();
-    syncURL();
-    render();
   }
 });
 
@@ -275,6 +401,7 @@ fetch("data.json")
     for (const p of DATA.clusters) {
       p._name = norm(p.name);
       p._text = norm([p.name, ...p.styles, ...p.tags, ...p.artists].join(" "));
+      p._tags = new Set([...p.styles, ...p.tags, p.name].map(norm).filter(Boolean));
       profiles.set(p.id, p);
     }
     for (const t of DATA.tracks) {
@@ -284,11 +411,19 @@ fetch("data.json")
       t._c = norm(t.cn);
       t._g = norm([...(t.g || []), ...(profiles.get(t.c)?.styles || [])].join(" "));
       t._all = `${t._n} ${t._a} ${t._al} ${t._c} ${t._g}`;
+      t._tags = profiles.get(t.c)?._tags || new Set();
     }
+
     const params = new URLSearchParams(location.search);
     state.q = params.get("q") || "";
-    const g = params.get("genre");
-    state.cluster = g !== null && g !== "" && profiles.has(Number(g)) ? Number(g) : null;
+    for (const id of (params.get("cluster") || "").split(",")) {
+      const n = Number(id);
+      if (id !== "" && profiles.has(n)) state.clusters.add(n);
+    }
+    for (const label of (params.get("tag") || "").split(",")) {
+      const key = norm(label);
+      if (key) state.tags.set(key, label.trim());
+    }
     $("q").value = state.q;
     renderStats();
     render();
