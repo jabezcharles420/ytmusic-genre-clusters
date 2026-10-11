@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Liked Music, sorted by sound</title>
+<meta name="description" content="Search a YouTube Music library clustered into genres by audio fingerprint.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <div class="brand">
+      <span class="logo" aria-hidden="true"></span>
+      <div>
+        <h1>Liked Music, sorted by sound</h1>
+        <p class="sub" id="sub">Loading library…</p>
+      </div>
+    </div>
+    <div class="searchbox">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.6-3.6"/></svg>
+      <input id="q" type="search" autocomplete="off" spellcheck="false"
+             placeholder="Search a song, artist, album or genre…" aria-label="Search">
+      <kbd>/</kbd>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <section class="stats" id="stats"></section>
+
+  <section class="genres" id="genres">
+    <div class="sectionhead">
+      <h2>Genres</h2>
+      <span class="hint" id="genresHint"></span>
+    </div>
+    <div class="grid" id="genreGrid"></div>
+  </section>
+
+  <section class="songs">
+    <div class="sectionhead">
+      <h2 id="songsTitle">Songs</h2>
+      <div class="filters" id="filters"></div>
+    </div>
+    <div class="list" id="list"></div>
+    <div class="more" id="more"></div>
+  </section>
+
+  <footer>
+    <p>
+      Clustered from 30-second previews: Discogs-EffNet style model → UMAP → HDBSCAN.
+      <span id="footnote"></span>
+    </p>
+    <p class="dim">Nothing here is a judgement of taste — the model only hears timbre.</p>
+  </footer>
+
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

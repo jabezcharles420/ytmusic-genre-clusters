@@ -1,0 +1,15 @@
+# YouTube Music access + browser cookie decryption
+ytmusicapi==1.12.3
+requests==2.34.2
+PySocks==1.7.1            # enables socks5h:// proxies for requests (Deezer tunnel)
+pycryptodome==3.24.0      # AES decryption of Chromium v10 cookies
+
+# Audio fingerprinting (ships its own TensorFlow runtime)
+essentia-tensorflow==2.1b6.dev1389
+numpy==2.5.4
+
+# Clustering
+scikit-learn==1.9.1
+umap-learn==0.5.12
+hdbscan==0.8.44
+tqdm==4.70.1              # imported by umap-learn at runtime

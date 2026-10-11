@@ -1,0 +1,10 @@
+# local cache: library, catalogue matches, previews, clusters
+data/
+# Essentia model graphs
+models/
+# python
+.venv/
+__pycache__/
+*.py[cod]
+# macOS
+.DS_Store
