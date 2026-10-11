@@ -244,6 +244,16 @@ function detailHTML(t) {
   return `<div class="detail">${bits.join("")}</div>`;
 }
 
+function tagMatchCount() {
+  let n = 0;
+  for (const t of DATA.tracks) {
+    for (const key of state.tags.keys()) {
+      if (t._tags.has(key)) { n++; break; }
+    }
+  }
+  return n;
+}
+
 function filterBar() {
   const pills = [];
   for (const id of state.clusters) {
@@ -259,7 +269,15 @@ function filterBar() {
   if (pills.length > 1) {
     pills.push(`<button class="clearall" type="button" data-clear-all="1">clear all</button>`);
   }
-  $("filters").innerHTML = pills.join("");
+  // On a genre page a tag only narrows that genre. Offer the library-wide view,
+  // which is usually what you want after noticing an interesting tag.
+  let escape = "";
+  if (onGenrePage() && state.tags.size) {
+    const n = tagMatchCount();
+    escape = `<button class="expand" type="button" data-expand-tags="1">
+      Show all ${n.toLocaleString()} songs with ${state.tags.size === 1 ? "this tag" : "these tags"} →</button>`;
+  }
+  $("filters").innerHTML = pills.join("") + escape;
 }
 
 function renderGenrePage(p) {
@@ -428,6 +446,20 @@ function revealList() {
   $("songsTitle").scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
+/* Leave the genre page, keeping the tag selection, and drop the text query so
+ * the result really is "all songs with these tags". */
+function expandTagsToLibrary() {
+  state.page = { kind: "home" };
+  state.clusters.clear();
+  state.q = "";
+  $("q").value = "";
+  state.expanded.clear();
+  state.shown = PAGE;
+  syncURL(true);
+  render();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
 /* ── events ──────────────────────────────────────────────── */
 
 let timer;
@@ -450,6 +482,7 @@ window.addEventListener("popstate", () => {
 
 document.addEventListener("click", (e) => {
   if (e.target.closest("[data-home]")) { goHome(); return; }
+  if (e.target.closest("[data-expand-tags]")) { expandTagsToLibrary(); return; }
 
   const tag = e.target.closest("[data-tag]");
   if (tag) { toggleTag(tag.dataset.tag); revealList(); return; }

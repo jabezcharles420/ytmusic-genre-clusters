@@ -222,6 +222,13 @@ h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: .08em;
   cursor: pointer;
 }
 .clearall:hover { color: var(--fg); border-color: var(--muted); }
+.expand {
+  background: rgba(34, 211, 238, .12); color: #7ee7f7;
+  border: 1px solid rgba(34, 211, 238, .34); border-radius: 999px;
+  padding: 5px 14px; font: inherit; font-size: 12.5px; cursor: pointer;
+  transition: background .12s;
+}
+.expand:hover { background: rgba(34, 211, 238, .22); }
 
 .more { margin-top: 14px; text-align: center; }
 .more button {
