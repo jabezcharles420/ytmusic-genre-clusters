@@ -11,6 +11,8 @@ browser — then writes the result back as playlists in your own account.
 > The demo is one real library (2,058 songs → 188 genre clusters). Search a song
 > and it tells you which cluster it landed in.
 
+![The search site: 2,058 songs clustered into 188 genres](preview.png)
+
 ---
 
 ## Why this exists
